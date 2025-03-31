@@ -52,21 +52,80 @@ The EDA explores the dataset's structure, cleans it, and visualizes key patterns
 ## Step 3: Predictive Modeling for Fraud Detection
 
 ### Overview
-Built two models (Logistic Regression and Random Forest) to predict `FRAUD_STATUS_6MONTH` at purchase time.
+Built two models—Logistic Regression (simple, interpretable) and Random Forest (complex, robust)—to predict `FRAUD_STATUS_6MONTH` (Y = 1, N = 0) at the moment of purchase. The process involves data preparation, handling imbalances, training, and evaluation.
 
-### Non-Obvious Steps
-- **Feature Selection**: Excluded `nopay_after_12month` and location columns (`ADDRESS_COUNTY_ENCR`, `OUTLET_COUNTY_ENCR`) from features. Only used data available at purchase (e.g., customer details, pricing, channel).
-  - **Why**: The model must predict fraud using only point-of-sale data, not post-purchase outcomes or potentially unavailable location info.
-- **Categorical Encoding**: Used `LabelEncoder` for categorical variables (e.g., `CUST_LEVEL`), filling NaN with 'Unknown' first.
-  - **Why**: Models need numeric inputs, and 'Unknown' preserves missingness without dropping rows prematurely.
-- **SMOTE for Imbalance**: Applied SMOTE to oversample the minority class (fraud) since fraud cases are rare.
-  - **Why**: Imbalanced data biases models toward the majority class (no fraud), reducing fraud detection ability. SMOTE balances this synthetically.
-- **Scaling Features**: Used `StandardScaler` even for Random Forest.
-  - **Why**: While Random Forest is scale-invariant, Logistic Regression requires it, and consistency simplifies pipeline design.
-- **Feature Importance Visualization**: Extracted and plotted Random Forest feature importance, saved to `plots/feature_importance_rf.png`.
-  - **Why**: Identifies key drivers of fraud (e.g., pricing, channel) for business insights.
+### Detailed Sub-Steps and Explanations
+
+#### Prepare the Data
+- **Target Definition**: Mapped `FRAUD_STATUS_6MONTH` to binary values (`Y` → 1, `N` → 0).
+  - **Why**: Binary classification requires a numeric target. This aligns with the business goal of detecting fraud.
+  - **Pitfall**: If any values besides 'Y' or 'N' exist (e.g., missing or typos), they’d be mapped to `NaN`, requiring further cleaning (handled later).
+- **Feature Selection**: Chose features available at purchase: `CUST_LEVEL`, `GENDER_ENCR`, `R_AGE_Y`, `INSTALMENT_IND`, `INSTAL_CNT`, `PRODUCT_NAME`, `MANUFACTURER_NAME_EN`, `OPERATING_SYSTEM`, `HANDSET_FEATURE_CAT_DESC`, `MOVING_AVERAGE_PRICE_AMT_ENCR`, `SELLING_PRICE_AMT_ENCR`, `UPFRONT_PYM_AMT_ENCR`, `monthly_fee_ENCR`, `TARIFF_LEVEL`, `CHANNEL_CLASS`, `channel_group`.
+  - **Why**: Excluded `nopay_after_12month` (post-purchase outcome) and location columns (`ADDRESS_COUNTY_ENCR`, `OUTLET_COUNTY_ENCR`) as they may not be available or relevant at purchase. Focused on customer, product, and transaction details to reflect real-time decision-making.
+  - **Reasoning**: Features like pricing and channel could signal risk (e.g., high-value phones on lax channels), aligning with hypotheses H1, H4, and H5.
+  - **Pitfall**: Excluding potentially predictive features (e.g., location) might miss regional fraud patterns, but this ensures deployability at purchase.
+
+#### Handle Categorical Variables
+- **Encoding**: Applied `LabelEncoder` to categorical columns (e.g., `CUST_LEVEL`, `PRODUCT_NAME`), filling NaN with 'Unknown' first.
+  - **Why**: Machine learning models require numeric inputs. 'Unknown' preserves missingness as a category, avoiding data loss.
+  - **Reasoning**: High-cardinality columns (e.g., `PRODUCT_NAME`) might lead to many unique values, but `LabelEncoder` is simple and sufficient for tree-based models like Random Forest.
+  - **Pitfall**: For Logistic Regression, one-hot encoding might be better for high-cardinality features to avoid implying ordinality, but this increases dimensionality—trade-off accepted for simplicity.
+- **Numeric Imputation**: Filled NaN in numeric columns (e.g., `R_AGE_Y`) with the median.
+  - **Why**: Median is robust to outliers (unlike mean), common in financial data (e.g., extreme prices).
+  - **Pitfall**: Imputation assumes missingness is random; if it’s systematic (e.g., fraudsters hide age), this could bias results.
+- **Target Alignment**: Dropped rows where `y` (target) was NaN and aligned `X` accordingly.
+  - **Why**: Models need a valid target for every row. This ensures consistency.
+  - **Pitfall**: Dropping rows reduces sample size, but fraud labels are critical, and imputation here is inappropriate.
+
+#### Handle Imbalanced Data with SMOTE
+- **SMOTE Application**: Used Synthetic Minority Oversampling Technique (SMOTE) to balance the dataset by oversampling fraud cases.
+  - **Why**: Fraud is likely rare (e.g., 5% of cases), skewing models toward predicting 'no fraud'. SMOTE creates synthetic fraud examples to balance classes.
+  - **Reasoning**: Printed class distribution before and after to verify balance (e.g., from 95% N, 5% Y to 50%-50%).
+  - **Pitfall**: SMOTE assumes fraud patterns are similar to existing ones, potentially overfitting to synthetic data. Alternatives like undersampling were avoided to retain data.
+
+#### Split the Data
+- **Train-Test Split**: Split resampled data into 70% training and 30% testing sets (`test_size=0.3`, `random_state=42`).
+  - **Why**: Training on one subset and testing on another simulates real-world prediction on unseen data. Fixed seed ensures reproducibility.
+  - **Reasoning**: 70-30 is a standard split, balancing training data volume with evaluation robustness.
+  - **Pitfall**: If the dataset is small, a smaller test set (e.g., 20%) might be better, but 30% ensures reliable performance metrics.
+
+#### Scale the Features
+- **StandardScaler**: Standardized features to mean=0, variance=1.
+  - **Why**: Logistic Regression assumes feature scales affect coefficients; scaling ensures fair contribution. Random Forest is scale-invariant but included for pipeline consistency.
+  - **Reasoning**: Fit scaler on training data only (`fit_transform`), then applied to test data (`transform`) to avoid data leakage.
+  - **Pitfall**: Scaling categorical encodings (from `LabelEncoder`) might distort their meaning, but impact is minimal for tree-based models.
+
+#### Train Models
+- **Logistic Regression**: Used `max_iter=1000` to ensure convergence.
+  - **Why**: Simple, interpretable baseline assuming linear relationships. Good for initial insights.
+  - **Reasoning**: Fast to train, but may miss complex fraud patterns (e.g., interactions between price and channel).
+- **Random Forest**: Used 100 trees (`n_estimators=100`).
+  - **Why**: Ensemble method capturing non-linearities and interactions, robust to noise. Suited for fraud’s complexity.
+  - **Reasoning**: Default parameters for simplicity; tuning (e.g., `max_depth`) could improve it further.
+  - **Pitfall**: Random Forest is computationally heavier and less interpretable than Logistic Regression.
+
+#### Evaluate Models
+- **Metrics**: Confusion matrix, classification report (precision, recall, F1-score), ROC-AUC score.
+  - **Why**: 
+    - Confusion matrix shows raw outcomes (e.g., false positives = rejected good customers).
+    - Precision/recall balances catching fraud (recall) vs. avoiding false alarms (precision).
+    - ROC-AUC measures overall discrimination, critical for imbalanced problems post-SMOTE.
+  - **Reasoning**: Fraud detection prioritizes recall (catching fraud) but needs decent precision for practicality.
+  - **Pitfall**: Metrics assume SMOTE data reflects reality; real-world imbalance might shift performance.
+
+#### Feature Importance (Random Forest)
+- **Extraction**: Retrieved and sorted feature importances from Random Forest.
+  - **Why**: Identifies key fraud drivers (e.g., `SELLING_PRICE_AMT_ENCR`, `CHANNEL_CLASS`) for business action.
+  - **Reasoning**: Tree-based importance reflects feature splits’ impact on prediction accuracy.
+  - **Pitfall**: Importance might overemphasize correlated features (e.g., price variables), requiring caution in interpretation.
+
+#### Visualize Feature Importance
+- **Bar Plot**: Saved to `plots/feature_importance_rf.png`.
+  - **Why**: Visual aid for stakeholders to prioritize risk factors.
+  - **Reasoning**: Sorted by importance for clarity, with `seaborn` for aesthetics.
+  - **Pitfall**: Plot assumes Random Forest’s importance is definitive; cross-validation could refine it.
 
 ### Model Evaluation
-- **Metrics**: Confusion matrix, classification report (precision, recall, F1-score), ROC-AUC score.
-- **Logistic Regression**: Baseline model, likely moderate performance (e.g., ROC-AUC 0.7-0.8).
-- **Random Forest**: Better performance (e.g., ROC-AUC 0.85-0.95) due to handling non-linear patterns.
+- **Logistic Regression**: Likely moderate performance (e.g., ROC-AUC 0.7-0.8). Misses complex patterns due to linearity.
+- **Random Forest**: Better performance (e.g., ROC-AUC 0.85-0.95). Captures non-linearities, recommended for deployment.
+- **Why Random Forest Wins**: Fraud involves subtle interactions (e.g., high price + low upfront payment), which trees handle well.
